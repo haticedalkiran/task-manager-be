@@ -3,6 +3,16 @@ const app = express();
 const http = require("http").createServer(app);
 const { Server } = require("socket.io");
 const cors = require("cors");
+const mongoose = require("mongoose");
+const Task = require("./models/taskSchema");
+const { ObjectId } = require("mongodb");
+
+mongoose.connect("mongodb://localhost:27017/task-manager-db", {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+let mongooseConn = mongoose.connection;
 
 const io = new Server(http, {
   cors: {
@@ -28,13 +38,66 @@ app.get("/", (req, res) => {
 });
 
 io.on("connection", (socket) => {
-  console.log("connected");
+  console.log("a user connected", socket.id);
 
-  socket.on("create-task", (task) => {
-    console.log(task);
+  try {
+    const tasks = Task.find({});
+    tasks.then((data) => {
+      socket.emit("receive-tasks", data);
+    });
+  } catch (error) {
+    console.log("error", error);
+  }
+
+  socket.on("new-task", (task) => {
+    mongooseConn.collection("tasks").insertOne(task, (err, res) => {
+      if (err) throw err;
+      console.log("task added successfully");
+    });
+    try {
+      const tasks = Task.find({});
+      tasks.then((data) => {
+        socket.broadcast.emit("receive-tasks", data);
+      });
+    } catch (error) {
+      console.log("error", error);
+    }
   });
 
-  socket.on("disconnect", () => console.log("disconnected"));
+  socket.on("delete-task", (id) => {
+    mongooseConn
+      .collection("tasks")
+      .deleteOne({ _id: new ObjectId(id) }, (err, res) => {
+        if (err) throw err;
+        console.log("task deleted successfully", res);
+        const tasks = Task.find({});
+        tasks.then((data) => {
+          socket.broadcast.emit("receive-tasks", data);
+        });
+      });
+  });
+  socket.on("update-task", (task) => {
+    console.log("gelen task", task);
+    mongooseConn.collection("tasks").updateOne(
+      { _id: new ObjectId(task.id) }, //TODO
+      { $set: { ...task } },
+      (err, result) => {
+        if (err) {
+          console.error("Update error:", err);
+        } else {
+          console.log("Update success:", result);
+          const tasks = Task.find({});
+          tasks.then((data) => {
+            socket.broadcast.emit("receive-tasks", data);
+          });
+        }
+      }
+    );
+  });
+
+  socket.on("disconnect", () => {
+    console.log("user disconnected", socket.id);
+  });
 });
 
 const PORT = process.env.PORT || 3000;
